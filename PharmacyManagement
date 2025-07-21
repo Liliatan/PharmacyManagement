@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract PharmacyManagement is Ownable {
+    // Struct for Medication
+    struct Medication {
+        uint256 id;
+        string name;
+        uint256 quantity;
+        uint256 price; // Price in wei
+        bool isAvailable;
+    }
+
+    // Struct for Prescription
+    struct Prescription {
+        uint256 id;
+        uint256 patientId;
+        uint256 medicationId;
+        uint256 quantity;
+        address prescribedBy; // Doctor's address
+        uint256 timestamp; // Unix timestamp
+        bool isFulfilled;
+    }
+
+    // Struct for Sale
+    struct Sale {
+        uint256 id;
+        uint256 prescriptionId;
+        uint256 medicationId;
+        uint256 quantity;
+        uint256 totalPrice; // In wei
+        uint256 timestamp; // Unix timestamp
+    }
+
+    // Counters for IDs
+    uint256 private nextMedicationId = 1;
+    uint256 private nextPrescriptionId = 1;
+    uint256 private nextSaleId = 1;
+
+    // Mappings
+    mapping(uint256 => Medication) public medications;
+    mapping(uint256 => Prescription) public prescriptions;
+    mapping(uint256 => Sale[]) public sales;
+    mapping(address => bool) public authorizedPharmacists;
+    mapping(address => bool) public authorizedDoctors;
+
+    // Events
+    event MedicationAdded(uint256 indexed medicationId, string name, uint256 quantity, uint256 price);
+    event MedicationUpdated(uint256 indexed medicationId, uint256 quantity, uint256 price);
+    event PrescriptionCreated(uint256 indexed prescriptionId, uint256 patientId, uint256 medicationId, address prescribedBy);
+    event PrescriptionFulfilled(uint256 indexed prescriptionId, uint256 saleId);
+    event SaleRecorded(uint256 indexed saleId, uint256 prescriptionId, uint256 medicationId, uint256 quantity, uint256 totalPrice);
+    event PharmacistAuthorized(address indexed pharmacist);
+    event PharmacistRevoked(address indexed pharmacist);
+    event DoctorAuthorized(address indexed doctor);
+    event DoctorRevoked(address indexed doctor);
+
+    constructor() Ownable(msg.sender) {}
+
+    // Modifier to restrict access to authorized pharmacists or owner
+    modifier onlyAuthorizedPharmacist() {
+        require(authorizedPharmacists[msg.sender] || owner() == msg.sender, "Not authorized pharmacist");
+        _;
+    }
+
+    // Modifier to restrict access to authorized doctors
+    modifier onlyAuthorizedDoctor() {
+        require(authorizedDoctors[msg.sender], "Not authorized doctor");
+        _;
+    }
+
+    // Authorize a pharmacist
+    function authorizePharmacist(address pharmacist) external onlyOwner {
+        require(pharmacist != address(0), "Invalid address");
+        authorizedPharmacists[pharmacist] = true;
+        emit PharmacistAuthorized(pharmacist);
+    }
+
+    // Revoke a pharmacist's authorization
+    function revokePharmacist(address pharmacist) external onlyOwner {
+        require(authorizedPharmacists[pharmacist], "Pharmacist not authorized");
+        authorizedPharmacists[pharmacist] = false;
+        emit PharmacistRevoked(pharmacist);
+    }
+
+    // Authorize a doctor
+    function authorizeDoctor(address doctor) external onlyOwner {
+        require(doctor != address(0), "Invalid address");
+        authorizedDoctors[doctor] = true;
+        emit DoctorAuthorized(doctor);
+    }
+
+    // Revoke a doctor's authorization
+    function revokeDoctor(address doctor) external onlyOwner {
+        require(authorizedDoctors[doctor], "Doctor not authorized");
+        authorizedDoctors[doctor] = false;
+        emit DoctorRevoked(doctor);
+    }
+
+    // Add a medication to inventory
+    function addMedication(
+        string memory name,
+        uint256 quantity,
+        uint256 price
+    ) external onlyAuthorizedPharmacist returns (uint256) {
+        require(bytes(name).length > 0, "Name cannot be empty");
+        require(quantity > 0, "Quantity must be greater than zero");
+        require(price > 0, "Price must be greater than zero");
+
+        uint256 medicationId = nextMedicationId++;
+        medications[medicationId] = Medication(medicationId, name, quantity, price, true);
+        emit MedicationAdded(medicationId, name, quantity, price);
+        return medicationId;
+    }
+
+    // Update medication inventory
+    function updateMedication(
+        uint256 medicationId,
+        uint256 quantity,
+        uint256 price
+    ) external onlyAuthorizedPharmacist {
+        require(medications[medicationId].isAvailable, "Medication not available");
+        require(quantity >= 0, "Quantity cannot be negative");
+        require(price > 0, "Price must be greater than zero");
+
+        medications[medicationId].quantity = quantity;
+        medications[medicationId].price = price;
+        emit MedicationUpdated(medicationId, quantity, price);
+    }
+
+    // Create a prescription
+    function createPrescription(
+        uint256 patientId,
+        uint256 medicationId,
+        uint256 quantity
+    ) external onlyAuthorizedDoctor returns (uint256) {
+        require(medications[medicationId].isAvailable, "Medication not available");
+        require(quantity > 0, "Quantity must be greater than zero");
+
+        uint256 prescriptionId = nextPrescriptionId++;
+        prescriptions[prescriptionId] = Prescription(
+            prescriptionId,
+            patientId,
+            medicationId,
+            quantity,
+            msg.sender,
+            block.timestamp,
+            false
+        );
+        emit PrescriptionCreated(prescriptionId, patientId, medicationId, msg.sender);
+        return prescriptionId;
+    }
+
+    // Fulfill a prescription and record a sale
+    function fulfillPrescription(uint256 prescriptionId) external payable onlyAuthorizedPharmacist returns (uint256) {
+        Prescription memory prescription = prescriptions[prescriptionId];
+        require(prescription.id != 0, "Prescription does not exist");
+        require(!prescription.isFulfilled, "Prescription already fulfilled");
+        require(medications[prescription.medicationId].isAvailable, "Medication not available");
+        require(medications[prescription.medicationId].quantity >= prescription.quantity, "Insufficient stock");
+        require(msg.value >= prescription.quantity * medications[prescription.medicationId].price, "Insufficient payment");
+
+        // Update inventory
+        medications[prescription.medicationId].quantity -= prescription.quantity;
+
+        // Mark prescription as fulfilled
+        prescriptions[prescriptionId].isFulfilled = true;
+
+        // Record sale
+        uint256 saleId = nextSaleId++;
+        uint256 totalPrice = prescription.quantity * medications[prescription.medicationId].price;
+        sales[prescriptionId].push(Sale(saleId, prescriptionId, prescription.medicationId, prescription.quantity, totalPrice, block.timestamp));
+        
+        emit PrescriptionFulfilled(prescriptionId, saleId);
+        emit SaleRecorded(saleId, prescriptionId, prescription.medicationId, prescription.quantity, totalPrice);
+
+        // Refund excess payment
+        if (msg.value > totalPrice) {
+            payable(msg.sender).transfer(msg.value - totalPrice);
+        }
+
+        return saleId;
+    }
+
+    // Get medication details
+    function getMedication(uint256 medicationId)
+        external
+        view
+        returns (string memory name, uint256 quantity, uint256 price, bool isAvailable)
+    {
+        require(medications[medicationId].id != 0, "Medication does not exist");
+        Medication memory med = medications[medicationId];
+        return (med.name, med.quantity, med.price, med.isAvailable);
+    }
+
+    // Get prescription details
+    function getPrescription(uint256 prescriptionId)
+        external
+        view
+        onlyAuthorizedPharmacist
+        returns (uint256 patientId, uint256 medicationId, uint256 quantity, address prescribedBy, uint256 timestamp, bool isFulfilled)
+    {
+        require(prescriptions[prescriptionId].id != 0, "Prescription does not exist");
+        Prescription memory pres = prescriptions[prescriptionId];
+        return (pres.patientId, pres.medicationId, pres.quantity, pres.prescribedBy, pres.timestamp, pres.isFulfilled);
+    }
+
+    // Get sales for a prescription
+    function getSales(uint256 prescriptionId)
+        external
+        view
+        onlyAuthorizedPharmacist
+        returns (Sale[] memory)
+    {
+        require(prescriptions[prescriptionId].id != 0, "Prescription does not exist");
+        return sales[prescriptionId];
+    }
+}
