@@ -207,14 +207,4 @@ contract PharmacyManagement is Ownable {
         return (pres.patientId, pres.medicationId, pres.quantity, pres.prescribedBy, pres.timestamp, pres.isFulfilled);
     }
 
-    // Get sales for a prescription
-    function getSales(uint256 prescriptionId)
-        external
-        view
-        onlyAuthorizedPharmacist
-        returns (Sale[] memory)
-    {
-        require(prescriptions[prescriptionId].id != 0, "Prescription does not exist");
-        return sales[prescriptionId];
-    }
-}
+
