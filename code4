@@ -1,0 +1,5 @@
+    {
+        require(medications[medicationId].id != 0, "Medication does not exist");
+        Medication memory med = medications[medicationId];
+        return (med.name, med.quantity, med.price, med.isAvailable);
+    }
