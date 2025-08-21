@@ -1,0 +1,5 @@
+  // Get medication details
+    function getMedication(uint256 medicationId)
+        external
+        view
+        returns (string memory name, uint256 quantity, uint256 price, bool isAvailable)
